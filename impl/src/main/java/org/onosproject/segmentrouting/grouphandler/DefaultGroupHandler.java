@@ -34,12 +34,13 @@ import org.onosproject.net.flow.DefaultTrafficSelector;
 import org.onosproject.net.flow.DefaultTrafficTreatment;
 import org.onosproject.net.flow.TrafficSelector;
 import org.onosproject.net.flow.TrafficTreatment;
-import org.onosproject.net.flowobjective.DefaultNextObjective;
-import org.onosproject.net.flowobjective.DefaultObjectiveContext;
+import org.onosproject.net.flowobjective.DefaultNextTreatment;
 import org.onosproject.net.flowobjective.FlowObjectiveService;
 import org.onosproject.net.flowobjective.NextObjective;
+import org.onosproject.net.flowobjective.DefaultNextObjective;
 import org.onosproject.net.flowobjective.Objective;
 import org.onosproject.net.flowobjective.ObjectiveContext;
+import org.onosproject.net.flowobjective.DefaultObjectiveContext;
 import org.onosproject.net.link.LinkService;
 import org.onosproject.segmentrouting.DefaultRoutingHandler;
 import org.onosproject.segmentrouting.SegmentRoutingManager;
@@ -389,7 +390,15 @@ public class DefaultGroupHandler {
                     .copyTtlOut()
                     .setMpls(MplsLabel.mplsLabel(pl.edgeLabel));
             }
-            nextObjBuilder.addTreatment(tBuilder.build());
+//            nextObjBuilder.addTreatment(tBuilder.build());
+            int weight = 1;
+            // FIXME: remove this hardcoding
+            log.warn("WEIGHTS: device: {}, port: {}", deviceId, pl.port.name());
+            if (deviceId.toString().equals("device:arista2") && pl.port.name().equals("0")) {
+                log.warn("WEIGHTS: setting weight to 8");
+                weight = 8;
+            }
+            nextObjBuilder.addTreatment(DefaultNextTreatment.of(tBuilder.build(), weight));
         });
 
         log.debug("addToHash in device {}: Adding Bucket with port/label {} "
@@ -1120,7 +1129,15 @@ public class DefaultGroupHandler {
                     }
 
                     tBuilder.setOutput(sp);
-                    nextObjBuilder.addTreatment(tBuilder.build());
+
+                    int weight = 1;
+                    // FIXME: remove this hardcoding
+                    log.warn("WEIGHTS: device: {}, port: {}", deviceId, sp.name());
+                    if (deviceId.toString().equals("device:arista2") && sp.name().equals("0")) {
+                        log.warn("WEIGHTS: setting weight to 8");
+                        weight = 8;
+                    }
+                    nextObjBuilder.addTreatment(DefaultNextTreatment.of(tBuilder.build(), weight));
                     treatmentAdded = true;
                     //update store
                     Set<DeviceId> existingNeighbors = dstNextHops.get(dst);
@@ -1783,11 +1800,22 @@ public class DefaultGroupHandler {
                                         + " port/label {}/{} to dst {} via {}",
                                         deviceId, nid, port, edgeLabel,
                                         dstDev, neighbor);
-                                nextObjBuilder
-                                    .addTreatment(treatmentBuilder(port,
+//                                nextObjBuilder
+//                                    .addTreatment(treatmentBuilder(port,
+//                                                                   neighborMac,
+//                                                                   dsKey.destinationSet().swap(),
+//                                                                   edgeLabel));
+                                int weight = 1;
+                                // FIXME: remove this hardcoding
+                                log.warn("BUCKET WEIGHTS: device: {}, port: {}", deviceId, port.name());
+                                if (deviceId.toString().equals("device:arista2") && port.name().equals("0")) {
+                                    log.warn("BUCKET WEIGHTS: setting weight to 8");
+                                    weight = 8;
+                                }
+                                nextObjBuilder.addTreatment(DefaultNextTreatment.of(treatmentBuilder(port,
                                                                    neighborMac,
                                                                    dsKey.destinationSet().swap(),
-                                                                   edgeLabel));
+                                                                   edgeLabel), weight));
                             });
                         });
                     });
