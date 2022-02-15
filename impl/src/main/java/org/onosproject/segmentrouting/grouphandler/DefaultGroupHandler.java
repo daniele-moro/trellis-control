@@ -1825,7 +1825,7 @@ public class DefaultGroupHandler {
      * @param ds destination set
      * @return true if VLAN needs to be popped
      */
-    private boolean popVlanInHashGroup(DestinationSet ds) {
+    public boolean popVlanInHashGroup(DestinationSet ds) {
         return (ds.getTypeOfDstSet() != DestinationSet.DestinationSetType.SWAP_NOT_BOS) &&
                 (ds.getTypeOfDstSet() != DestinationSet.DestinationSetType.POP_NOT_BOS);
     }

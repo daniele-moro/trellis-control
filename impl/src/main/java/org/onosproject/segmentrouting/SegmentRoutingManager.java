@@ -96,6 +96,7 @@ import org.onosproject.segmentrouting.config.DeviceConfigNotFoundException;
 import org.onosproject.segmentrouting.config.SegmentRoutingAppConfig;
 import org.onosproject.segmentrouting.config.SegmentRoutingDeviceConfig;
 import org.onosproject.segmentrouting.grouphandler.DefaultGroupHandler;
+import org.onosproject.segmentrouting.grouphandler.DefaultWCMPHandler;
 import org.onosproject.segmentrouting.grouphandler.DestinationSet;
 import org.onosproject.segmentrouting.grouphandler.NextNeighbors;
 import org.onosproject.segmentrouting.mcast.McastFilteringObjStoreKey;
@@ -331,6 +332,7 @@ public class SegmentRoutingManager implements SegmentRoutingService {
     ExecutorService neighborExecutor;
 
     Map<DeviceId, DefaultGroupHandler> groupHandlerMap = new ConcurrentHashMap<>();
+    Map<DeviceId, DefaultWCMPHandler> wcmpHandlerMap = new ConcurrentHashMap<>();
     /**
      * Per device next objective ID store with (device id + destination set) as key.
      * Used to keep track on MPLS group information.
@@ -627,6 +629,8 @@ public class SegmentRoutingManager implements SegmentRoutingService {
         deviceListener = null;
         groupHandlerMap.forEach((k, v) -> v.shutdown());
         groupHandlerMap.clear();
+        wcmpHandlerMap.forEach((k, v) -> v.shutdown());
+        wcmpHandlerMap.clear();
         defaultRoutingHandler.shutdown();
 
         dsNextObjStore.destroy();
@@ -1369,6 +1373,15 @@ public class SegmentRoutingManager implements SegmentRoutingService {
     DefaultGroupHandler getGroupHandler(DeviceId devId) {
         return groupHandlerMap.get(devId);
     }
+    /**
+     * Returns the wcmp handler object for the specified device id.
+     *
+     * @param devId the device identifier
+     * @return the wcmpHandler object for the device id, or null if not found
+     */
+    DefaultWCMPHandler getWCMPHandler(DeviceId devId) {
+        return wcmpHandlerMap.get(devId);
+    }
 
     /**
      * Returns the default routing handler object.
@@ -1653,6 +1666,28 @@ public class SegmentRoutingManager implements SegmentRoutingService {
             groupHandlerMap.put(deviceId, groupHandler);
         }
 
+        log.debug("Current wcmpHandlerMap devs: {}", wcmpHandlerMap.keySet());
+        if (wcmpHandlerMap.get(deviceId) == null) {
+            DefaultWCMPHandler wcmpHandler;
+            try {
+                wcmpHandler = DefaultWCMPHandler.
+                        createWCMPHandler(deviceId,
+                                appId,
+                                deviceConfiguration,
+                                linkService,
+                                flowObjectiveService,
+                                this,
+                                groupHandlerMap.get(deviceId),
+                                topologyService);
+            } catch (DeviceConfigNotFoundException e) {
+                log.warn(e.getMessage() + " Aborting processDeviceAdded.");
+                return;
+            }
+            log.debug("updating wcmpHandlerMap with new wcmpHdlr for device: {}",
+                    deviceId);
+            wcmpHandlerMap.put(deviceId, wcmpHandler);
+        }
+
         if (shouldProgram(deviceId)) {
             defaultRoutingHandler.populatePortAddressingRules(deviceId);
             DefaultGroupHandler groupHandler = groupHandlerMap.get(deviceId);
@@ -1681,6 +1716,10 @@ public class SegmentRoutingManager implements SegmentRoutingService {
         DefaultGroupHandler gh = groupHandlerMap.remove(device.id());
         if (gh != null) {
             gh.shutdown();
+        }
+        DefaultWCMPHandler wcmph = wcmpHandlerMap.remove(device.id());
+        if (wcmph != null) {
+            wcmph.shutdown();
         }
         // Note that a switch going down is associated with all of its links
         // going down as well, but it is treated as a single switch down event
@@ -2122,6 +2161,7 @@ public class SegmentRoutingManager implements SegmentRoutingService {
 
             switch (event.type()) {
             case INSTANCE_ACTIVATED:
+
             case INSTANCE_ADDED:
             case INSTANCE_READY:
                 log.debug("Cluster event {} ignored", event.type());
