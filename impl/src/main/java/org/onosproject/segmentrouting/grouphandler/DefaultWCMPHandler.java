@@ -222,59 +222,45 @@ public class DefaultWCMPHandler {
                             .fromApp(appId);
 
                     next.dstNextHops().forEach((dstDev, nextHops) -> {
-                        log.warn("WCMPdebug1 for dev: {}, nid: {}, dstdev: {}, nextHops: {}",
-                                deviceId, nid, dstDev, nextHops);
+
+                        HashMap<DeviceId, Integer> intermediateWeightMap = new HashMap<>(); // Stores the weight of nh
+                        HashMap<PortNumber, Integer> finalPortWeightMap;  // Stores the final weights of ports
+
                         if (nextHops.contains(dstDev)) {
-                            //seeing a one link path
-                            log.warn("WCMPdebug2 one link path for dev: {}, nid: {}, dstdev: {}, nextHops: {}",
-                                    deviceId, nid, dstDev, nextHops);
-                        }
-                        HashMap<DeviceId, Set<Link>> nextHopEgLinkMap = new HashMap<>();  //links from nh to Dest
-                        HashMap<DeviceId, Long> nextHopLinkSpeedMap = new HashMap<>();  //Throughput from nh to Dest
-                        // Find nextHopEgLinkMap by getting the paths for each dstDev:
-                        Topology topology = tpService.currentTopology();
-                        for (Path path: tpService.getPaths(topology, deviceId, dstDev)) {
-                            log.warn("WCMPdebug3 path: {} dev: {}, nid: {}, dstdev: {}", path, deviceId, nid, dstDev);
-                            for (Link link : path.links()) {
-                                DeviceId srcDev = link.src().deviceId();
-                                DeviceId dsDev = link.dst().deviceId();
-                                log.warn("WCMPdebug4 link: {} for dev: {}, dstdev: {}, s: {}, d:{}",
-                                        link, deviceId, dstDev, srcDev, dsDev);
-                                if (nextHops.contains(link.src().deviceId())) {
-                                    //seeing a link egressing from the next hop, so next hop is an intermediate switch
-                                    Set<Link> soFarLinks = nextHopEgLinkMap.get(link.src().deviceId());
-                                    if (soFarLinks == null) {
-                                        log.warn("WCMPdebug5: soFarLinks=null");
-                                        soFarLinks = new HashSet<Link>();
+                            //Destination is the nexthop so its weight is 1
+                            intermediateWeightMap.put(dstDev, 1);
+                        } else {
+                            HashMap<DeviceId, Set<Link>> nextHopEgLinkMap = new HashMap<>(); //links from nh to Dst
+                            HashMap<DeviceId, Long> nextHopLinkSpeedMap = new HashMap<>(); //Throughput from nh to Dst
+                            // Find nextHopEgLinkMap through the paths calculated for each dstDev:
+                            Topology topology = tpService.currentTopology();
+                            for (Path path: tpService.getPaths(topology, deviceId, dstDev)) {
+                                for (Link link : path.links()) {
+                                    if (nextHops.contains(link.src().deviceId())) {
+                                        //seeing a link egressing from the nh (next hop is an intermediate switch)
+                                        Set<Link> soFarLinks = nextHopEgLinkMap.get(link.src().deviceId());
+                                        if (soFarLinks == null) {
+                                            soFarLinks = new HashSet<Link>();
+                                        }
+                                        soFarLinks.add(link);
+                                        nextHopEgLinkMap.put(link.src().deviceId(), soFarLinks);
                                     }
-                                    log.warn("WCMPdebug51 soFarLinks: {} for srcDev: {}",
-                                            soFarLinks, srcDev);
-                                    soFarLinks.add(link);
-                                    log.warn("WCMPdebug6 adding link to soFarLinks for dev: {}, nid: {}, " +
-                                                    "dsdev: {}, srcDev: {}", deviceId, nid, dstDev, srcDev);
-                                    nextHopEgLinkMap.put(link.src().deviceId(), soFarLinks);
-                                }
-
-                                if (deviceId.equals(link.src().deviceId()) & nextHops.contains(link.dst().deviceId())) {
-                                    // seeing a link from device to next hop, Ingress links
                                 }
                             }
+                            //populate nextHopLinkSpeedMap for a leaf to leaf path):
+                            nextHopEgLinkMap.forEach((neighbor, egLinksSet) -> {
+                                Long intermediateWeight = 0L;
+                                for (Link link: egLinksSet) {
+                                    intermediateWeight = intermediateWeight +
+                                            srManager.deviceService.getPort(neighbor, link.src().port()).portSpeed();
+                                }
+                                nextHopLinkSpeedMap.put(neighbor, intermediateWeight);
+                            });
+                            intermediateWeightMap =
+                                    computeIntermediateWeights(nextHopLinkSpeedMap);
                         }
-                        //populate nextHopLinkSpeedMap:
-                        nextHopEgLinkMap.forEach((neighbor, egLinksSet) -> {
-                            log.warn("WCMPdebug7 nextHopEgLinkMap entries for dev: {}, dstDev: {}, key: {}, value:{}",
-                                    deviceId, dstDev, neighbor, egLinksSet);
-                            Long intermediateWeight = 0L;
-                            for (Link link: egLinksSet) {
-                                intermediateWeight = intermediateWeight +
-                                        srManager.deviceService.getPort(neighbor, link.src().port()).portSpeed();
-                            }
-                            nextHopLinkSpeedMap.put(neighbor, intermediateWeight);
-                        });
-                        HashMap<DeviceId, Integer> intermediateWeightMap =
-                                computeIntermediateWeights(nextHopLinkSpeedMap);
 
-                        //Now we have intermediate weights and need to calculate the final weights
+                        //Calculate the final weights based on the intermediate weights and interfaces port speed
                         HashMap<DeviceId, HashMap<PortNumber, Long>> neighborPortSpeedMap = new HashMap<>();
                         nextHops.forEach(neighbor -> {
                             MacAddress neighborMac;
@@ -289,14 +275,14 @@ public class DefaultWCMPHandler {
                             grHandler.devicePortMap.get(neighbor).forEach(port -> {
                                 innerPortSpeedMap.put(port, srManager.deviceService.getPort(deviceId, port)
                                         .portSpeed());
-
                             });
                             neighborPortSpeedMap.put(neighbor, innerPortSpeedMap);
                         });
 
-                        //calculate the final weights
-                        HashMap<PortNumber, Integer> finalPortWeightMap =
+                        finalPortWeightMap =
                                 computeFinalWeights(intermediateWeightMap, neighborPortSpeedMap);
+                        log.warn("WCMPdebug10 finalPortWeightMap for dev: {}, dstDev: {}, finalPortWeightMap:{}",
+                                deviceId, dstDev, finalPortWeightMap);
 
                         //build the next objective with the new weight
                         int edgeLabel = dsKey.destinationSet().getEdgeLabel(dstDev);
@@ -372,28 +358,27 @@ public class DefaultWCMPHandler {
             intermediateWeightMap.forEach((neighbor, neighborWeight) -> {
                 HashMap<PortNumber, Long> portSpeedInnerMap =
                         (HashMap<PortNumber, Long>) neighborPortSpeedMap.get(neighbor);
-                Long sum = (long) 0.0;
-                for (Long f : portSpeedInnerMap.values()) {
-                    sum += f;
-                }
-                double sumSpeed = sum.doubleValue();
+
+                double sumSpeed = portSpeedInnerMap.values().stream().reduce(0L, Long::sum).doubleValue();
                 portSpeedInnerMap.forEach((k, v) -> {
-                    tempMap.put(k, v != null ? (double) neighborWeight * v / sumSpeed : null);
+                    tempMap.put(k, ((Integer) neighborWeight).doubleValue() * v / sumSpeed);
                 });
             });
-
             tempMap.forEach((k, v) -> {
-                portWeightMap.put(k, v != null ? (int) Math.round(v / Collections.min(tempMap.values())) : null);
+                portWeightMap.put(k, (int) Math.round(v / Collections.min(tempMap.values())));
             });
-
             return portWeightMap;
         }
 
         HashMap<DeviceId, Integer> computeIntermediateWeights(HashMap nextHopLinkSpeedMap) {
 
-            double min = (double) Collections.min(nextHopLinkSpeedMap.values());
-            nextHopLinkSpeedMap.replaceAll((k, v) -> v != null ? (int) Math.round((double) v / min) : null);
-            return nextHopLinkSpeedMap;
+            HashMap<DeviceId, Integer> intermediateWeights = new HashMap<>();
+            long min = (long) Collections.min(nextHopLinkSpeedMap.values());
+            nextHopLinkSpeedMap.forEach((k, v) -> {
+                intermediateWeights.put(
+                        (DeviceId) k, (int) Math.round(((Long) v).doubleValue() / (double) min));
+            });
+            return intermediateWeights;
         }
     }
 }
